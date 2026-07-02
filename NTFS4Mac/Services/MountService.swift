@@ -148,9 +148,9 @@ enum MountError: LocalizedError, Sendable {
             if details?.localizedCaseInsensitiveContains("Operation not permitted") == true {
                 message += """
 
-                Добавьте NTFS4Mac в:
-                Системные настройки → Конфиденциальность и безопасность → Полный доступ к диску
-                Затем перезапустите приложение.
+                Add NTFS4Mac in:
+                System Settings → Privacy & Security → Full Disk Access
+                Then restart the app.
                 """
             } else {
                 message += """
