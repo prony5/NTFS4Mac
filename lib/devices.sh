@@ -34,13 +34,16 @@ list_ntfs_devices() {
         while IFS= read -r part; do
             [ -z "$part" ] && continue
 
-            # Get filesystem type
-            local fs_type
+            # Get filesystem type (macOS may misreport Type (Bundle) as exfat)
+            local fs_type partition_type
             fs_type="$(diskutil info "/dev/$part" 2>/dev/null \
                 | grep "Type (Bundle):" | awk -F': ' '{print $2}')" || true
+            partition_type="$(diskutil info "/dev/$part" 2>/dev/null \
+                | grep "Partition Type:" | awk -F': ' '{print $2}')" || true
 
             # Only show NTFS partitions
-            [[ "$fs_type" != *NTFS* ]] && [[ "$fs_type" != *ntfs* ]] && continue
+            [[ "$fs_type" != *NTFS* && "$fs_type" != *ntfs* \
+                && "$partition_type" != *NTFS* && "$partition_type" != *ntfs* ]] && continue
 
             # Get volume name
             local vol_name

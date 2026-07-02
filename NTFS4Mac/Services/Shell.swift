@@ -19,11 +19,14 @@ enum Shell {
         return String(data: data, encoding: .utf8) ?? ""
     }
 
-    static func runWithSudo(_ command: String, arguments: [String]) async throws -> (stdout: String, exitCode: Int32) {
-        // Build the full command string with proper shell escaping
+    static func runWithSudo(_ command: String, arguments: [String] = []) async throws -> (stdout: String, exitCode: Int32) {
+        let (stdout, exitCode, _) = try await runWithSudoDetailed(command, arguments: arguments)
+        return (stdout, exitCode)
+    }
+
+    static func runWithSudoDetailed(_ command: String, arguments: [String] = []) async throws -> (stdout: String, exitCode: Int32, stderr: String) {
         var parts = [command]
         for arg in arguments {
-            // Simple escaping: if arg contains spaces or special chars, quote it
             if arg.contains(" ") || arg.contains("'") || arg.contains("\"") || arg.contains("$") {
                 let escaped = arg
                     .replacingOccurrences(of: "\\", with: "\\\\")
@@ -34,11 +37,8 @@ enum Shell {
             }
         }
         let fullCommand = parts.joined(separator: " ")
-
-        // Escape the command for AppleScript string
         let escapedForAppleScript = fullCommand.replacingOccurrences(of: "\"", with: "\\\"")
 
-        // Use osascript to prompt for admin privileges in GUI
         let script = "do shell script \"\(escapedForAppleScript)\" with administrator privileges"
 
         let process = Process()
@@ -54,9 +54,11 @@ enum Shell {
         process.waitUntilExit()
 
         let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-        _ = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+        let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+        let stdout = String(data: stdoutData, encoding: .utf8) ?? ""
+        let stderr = String(data: stderrData, encoding: .utf8) ?? ""
 
-        return (String(data: stdoutData, encoding: .utf8) ?? "", process.terminationStatus)
+        return (stdout, process.terminationStatus, stderr)
     }
 
     static func runDiskutil(_ arguments: [String]) async throws -> String {

@@ -108,9 +108,12 @@ final class DeviceService {
         let output = try await Shell.run("/usr/sbin/diskutil", arguments: ["info", "/dev/\(partID)"])
         let info = parseDiskutilInfo(output)
 
-        // Filter: only NTFS
-        guard info["fsType"]?.contains("NTFS") == true ||
-              info["fsType"]?.contains("ntfs") == true else {
+        // Filter: only NTFS (macOS may misreport Type (Bundle) as exfat)
+        let fsType = info["fsType"] ?? ""
+        let partitionType = info["partitionType"] ?? ""
+        let isNTFS = fsType.localizedCaseInsensitiveContains("NTFS")
+            || partitionType.localizedCaseInsensitiveContains("NTFS")
+        guard isNTFS else {
             return nil
         }
 
@@ -147,11 +150,10 @@ final class DeviceService {
                 break
             }
 
-            // Check for ntfs-3g mount (read-write)
-            if line.contains("ntfs-3g") && line.contains(partID) {
+            // Check for ntfs-3g / MacFUSE mount (read-write)
+            if line.contains(partID) && (line.contains("macfuse") || line.contains("ntfs-3g")) {
                 isRW = true
                 isMounted = true
-                // Extract mount point
                 if let range = line.range(of: " on ") {
                     let afterOn = line[range.upperBound...]
                     if let endRange = afterOn.range(of: " (") {
@@ -197,6 +199,8 @@ final class DeviceService {
             switch key {
             case "Type (Bundle)":
                 result["fsType"] = value
+            case "Partition Type":
+                result["partitionType"] = value
             case "Volume Name":
                 result["volumeName"] = (value == "Not applicable (no file system)") ? "" : value
             case "Mount Point":

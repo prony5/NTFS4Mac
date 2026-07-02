@@ -5,6 +5,7 @@ struct DeviceRow: View {
     let onMount: () -> Void
     let onUnmount: () -> Void
     let onRestore: () -> Void
+    let onEject: () -> Void
     let onOpenInFinder: () -> Void
 
     var body: some View {
@@ -56,6 +57,13 @@ struct DeviceRow: View {
                     .tint(.accentColor)
                     .controlSize(.small)
             }
+
+            Button(action: onEject) {
+                Label("Eject", systemImage: "eject.fill")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .help("Safely disconnect this drive")
         }
         .padding(.vertical, 8)
         .padding(.horizontal, 12)

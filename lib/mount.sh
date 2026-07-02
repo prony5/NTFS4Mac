@@ -11,11 +11,13 @@ mount_device() {
     # Verify device exists
     diskutil info "$dev" &>/dev/null || error "Device $dev not found."
 
-    # Verify it's NTFS
-    local fs_type
+    # Verify it's NTFS (macOS may misreport Type (Bundle) as exfat)
+    local fs_type partition_type
     fs_type="$(diskutil info "$dev" 2>/dev/null | grep "Type (Bundle):" | awk -F': ' '{print $2}')" || true
-    [[ "$fs_type" != *NTFS* ]] && [[ "$fs_type" != *ntfs* ]] && \
-        error "$dev is not NTFS (type: ${fs_type:-unknown})."
+    partition_type="$(diskutil info "$dev" 2>/dev/null | grep "Partition Type:" | awk -F': ' '{print $2}')" || true
+    [[ "$fs_type" != *NTFS* && "$fs_type" != *ntfs* \
+        && "$partition_type" != *NTFS* && "$partition_type" != *ntfs* ]] && \
+        error "$dev is not NTFS (bundle: ${fs_type:-unknown}, partition: ${partition_type:-unknown})."
 
     # Check if already mounted read-write via ntfs-3g
     if mount | grep -q "ntfs-3g.*$(dev_name "$dev")"; then
