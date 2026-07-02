@@ -46,6 +46,7 @@ struct DeviceListView: View {
                                 onMount: { operate(.mount(device)) },
                                 onUnmount: { operate(.unmount(device)) },
                                 onRestore: { operate(.restore(device)) },
+                                onEject: { operate(.eject(device)) },
                                 onOpenInFinder: { openInFinder(device) }
                             )
                         }
@@ -90,6 +91,7 @@ struct DeviceListView: View {
         case mount(NTFSDevice)
         case unmount(NTFSDevice)
         case restore(NTFSDevice)
+        case eject(NTFSDevice)
     }
 
     private func openInFinder(_ device: NTFSDevice) {
@@ -112,6 +114,8 @@ struct DeviceListView: View {
                     try await mountService.unmount(device: d)
                 case .restore(let d):
                     try await mountService.restore(device: d)
+                case .eject(let d):
+                    try await mountService.eject(device: d)
                 }
                 try await Task.sleep(nanoseconds: 500_000_000)
                 await deviceService.refresh()

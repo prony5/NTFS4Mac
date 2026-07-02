@@ -30,6 +30,19 @@ final class MountService: Sendable {
         return nil
     }
 
+    private static func resolveNTFSFixPath() -> String? {
+        let candidates = [
+            "/opt/homebrew/bin/ntfsfix",
+            "/usr/local/bin/ntfsfix"
+        ]
+        for path in candidates {
+            if FileManager.default.isExecutableFile(atPath: path) {
+                return path
+            }
+        }
+        return nil
+    }
+
     // MARK: - Mount as read-write
 
     func mount(device: NTFSDevice) async throws {
@@ -37,47 +50,45 @@ final class MountService: Sendable {
             throw MountError.ntfs3gNotFound
         }
 
+        let ntfsfixPath = Self.resolveNTFSFixPath()
         let mountPath = "/Volumes/\(device.displayName)"
+        let escapedMountPath = mountPath.replacingOccurrences(of: "'", with: "'\\''")
+        let escapedNode = device.diskNode.replacingOccurrences(of: "'", with: "'\\''")
+        let escapedNTFS3G = ntfs3gPath.replacingOccurrences(of: "'", with: "'\\''")
+        let escapedNTFSFix = ntfsfixPath?.replacingOccurrences(of: "'", with: "'\\''")
+        let volName = device.displayName.replacingOccurrences(of: "'", with: "'\\''")
 
-        // Step 1: Unmount any existing mounts for this device
-        // This includes both macOS native and potential duplicate mounts
-        _ = try? await Shell.runWithSudo("/sbin/umount", arguments: ["-f", device.diskNode])
+        let fixStep: String
+        if let escapedNTFSFix {
+            fixStep = "'\(escapedNTFSFix)' '\(escapedNode)' || true; sleep 0.3; "
+        } else {
+            fixStep = ""
+        }
 
-        // Also try diskutil unmount
-        _ = try? await Shell.run("/usr/sbin/diskutil", arguments: ["unmount", "force", device.diskNode])
+        let mountScript = """
+        /sbin/umount -f '\(escapedNode)' 2>/dev/null || true; \
+        /usr/sbin/diskutil unmount force '\(escapedNode)' 2>/dev/null || true; \
+        sleep 0.5; \
+        \(fixStep)\
+        /bin/rm -rf '\(escapedMountPath)'; \
+        /bin/mkdir -p '\(escapedMountPath)'; \
+        '\(escapedNTFS3G)' '\(escapedNode)' '\(escapedMountPath)' \
+          -o auto_xattr -o volname='\(volName)' -o local -o remove_hiberfile
+        """
 
-        try await Task.sleep(nanoseconds: 500_000_000)
+        let (_, exitCode, stderr) = try await Shell.runWithSudoDetailed("/bin/sh", arguments: ["-c", mountScript])
 
-        // Step 2: Clean up mount point
-        var cleanupArgs = ["-rf", mountPath]
-        _ = try? await Shell.runWithSudo("/bin/rm", arguments: cleanupArgs)
-
-        // Step 3: Create fresh mount point
-        _ = try await Shell.runWithSudo("/bin/mkdir", arguments: ["-p", mountPath])
-
-        try await Task.sleep(nanoseconds: 200_000_000)
-
-        // Step 4: Mount via ntfs-3g with fuse-t
-        let result = try await Shell.runWithSudo(ntfs3gPath, arguments: [
-            device.diskNode,
-            mountPath,
-            "-o", "auto_xattr",
-            "-o", "volname=\(device.displayName)",
-            "-o", "local"
-        ])
-
-        if result.exitCode != 0 {
-            throw MountError.mountFailed(code: result.exitCode)
+        if exitCode != 0 {
+            let details = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            throw MountError.mountFailed(code: exitCode, details: details.isEmpty ? nil : details)
         }
     }
 
     // MARK: - Unmount
 
     func unmount(device: NTFSDevice) async throws {
-        // Try umount first
         let result = try await Shell.runWithSudo("/sbin/umount", arguments: ["-f", device.diskNode])
         if result.exitCode != 0 {
-            // Fallback to diskutil
             _ = try? await Shell.run("/usr/sbin/diskutil", arguments: ["unmount", "force", device.diskNode])
         }
     }
@@ -85,9 +96,21 @@ final class MountService: Sendable {
     // MARK: - Eject
 
     func eject(device: NTFSDevice) async throws {
-        _ = try? await Shell.runWithSudo("/sbin/umount", arguments: ["-f", device.diskNode])
-        try await Task.sleep(nanoseconds: 500_000_000)
-        _ = try? await Shell.run("/usr/sbin/diskutil", arguments: ["eject", device.diskNode])
+        let escapedNode = device.diskNode.replacingOccurrences(of: "'", with: "'\\''")
+
+        let ejectScript = """
+        /sbin/umount -f '\(escapedNode)' 2>/dev/null || true; \
+        /usr/sbin/diskutil unmount force '\(escapedNode)' 2>/dev/null || true; \
+        sleep 0.5; \
+        /usr/sbin/diskutil eject '\(escapedNode)'
+        """
+
+        let (_, exitCode, stderr) = try await Shell.runWithSudoDetailed("/bin/sh", arguments: ["-c", ejectScript])
+
+        if exitCode != 0 {
+            let details = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            throw MountError.ejectFailed(details: details.isEmpty ? nil : details)
+        }
     }
 
     // MARK: - Restore read-only
@@ -99,8 +122,6 @@ final class MountService: Sendable {
 
         _ = try? await Shell.runWithSudo("/sbin/umount", arguments: ["-f", device.diskNode])
         try await Task.sleep(nanoseconds: 500_000_000)
-
-        // Let macOS auto-remount, or force it
         _ = try? await Shell.run("/usr/sbin/diskutil", arguments: ["mount", device.diskNode])
     }
 }
@@ -109,8 +130,9 @@ final class MountService: Sendable {
 
 enum MountError: LocalizedError, Sendable {
     case ntfs3gNotFound
-    case mountFailed(code: Int32)
+    case mountFailed(code: Int32, details: String?)
     case unmountFailed
+    case ejectFailed(details: String?)
     case timeout
     case alreadyReadOnly
 
@@ -118,10 +140,37 @@ enum MountError: LocalizedError, Sendable {
         switch self {
         case .ntfs3gNotFound:
             return "ntfs-3g not found. Install: brew install ntfs-3g-mac"
-        case .mountFailed(let code):
-            return "Mount failed (exit code \(code)). The drive may be in hibernation from Windows."
+        case .mountFailed(let code, let details):
+            var message = "Mount failed (exit code \(code))."
+            if let details, !details.isEmpty {
+                message += "\n\(details)"
+            }
+            if details?.localizedCaseInsensitiveContains("Operation not permitted") == true {
+                message += """
+
+                Добавьте NTFS4Mac в:
+                Системные настройки → Конфиденциальность и безопасность → Полный доступ к диску
+                Затем перезапустите приложение.
+                """
+            } else {
+                message += """
+
+                Or in Terminal:
+                sudo ntfsfix /dev/diskXsY
+                sudo ntfs-3g /dev/diskXsY /Volumes/YourDisk -o remove_hiberfile -o local
+                """
+            }
+            return message
         case .unmountFailed:
             return "Unmount failed. Close any apps using this volume."
+        case .ejectFailed(let details):
+            var message = "Failed to safely eject the drive."
+            if let details, !details.isEmpty {
+                message += "\n\(details)"
+            } else {
+                message += " Close Finder windows and apps using this disk, then try again."
+            }
+            return message
         case .timeout:
             return "Mount timed out. Possible Windows Fast Startup issue."
         case .alreadyReadOnly:
