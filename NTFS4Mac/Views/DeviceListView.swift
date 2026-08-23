@@ -45,7 +45,6 @@ struct DeviceListView: View {
                                 device: device,
                                 isOperating: isOperating,
                                 onMount: { operate(.mount(device)) },
-                                onUnmount: { operate(.unmount(device)) },
                                 onRestore: { operate(.restore(device)) },
                                 onEject: { operate(.eject(device)) },
                                 onOpenInFinder: { openInFinder(device) }
@@ -96,7 +95,6 @@ struct DeviceListView: View {
 
     private enum Operation {
         case mount(NTFSDevice)
-        case unmount(NTFSDevice)
         case restore(NTFSDevice)
         case eject(NTFSDevice)
     }
@@ -127,8 +125,6 @@ struct DeviceListView: View {
                 switch op {
                 case .mount(let d):
                     try await mountService.mount(device: d)
-                case .unmount(let d):
-                    try await mountService.unmount(device: d)
                 case .restore(let d):
                     try await mountService.restore(device: d)
                 case .eject(let d):

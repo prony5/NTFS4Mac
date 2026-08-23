@@ -4,7 +4,6 @@ struct DeviceRow: View {
     let device: NTFSDevice
     var isOperating = false
     let onMount: () -> Void
-    let onUnmount: () -> Void
     let onRestore: () -> Void
     let onEject: () -> Void
     let onOpenInFinder: () -> Void
@@ -60,7 +59,7 @@ struct DeviceRow: View {
                 .help("Open in Finder")
             }
 
-            // Action button
+            // Action buttons
             if device.needsMountAction {
                 Button(device.filesystemType.mountButtonLabel) { onMount() }
                     .buttonStyle(.borderedProminent)
@@ -69,13 +68,15 @@ struct DeviceRow: View {
                     .disabled(isOperating)
             }
 
-            Button(action: onEject) {
-                Label("Eject", systemImage: "eject.fill")
+            if device.isMounted {
+                Button(action: onEject) {
+                    Label("Eject", systemImage: "eject.fill")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(isOperating)
+                .help("Unmount and safely disconnect this drive")
             }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .disabled(isOperating)
-            .help("Safely disconnect this drive")
         }
         .padding(.vertical, 8)
         .padding(.horizontal, 12)
