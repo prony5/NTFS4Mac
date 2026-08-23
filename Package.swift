@@ -7,7 +7,8 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "NTFS4Mac",
-            path: "NTFS4Mac"
+            path: "NTFS4Mac",
+            resources: [.copy("VERSION")]
         )
     ]
 )

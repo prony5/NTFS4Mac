@@ -78,16 +78,18 @@ final class MountService: Sendable {
         let volName = device.displayName.replacingOccurrences(of: "'", with: "'\\''")
 
         let mountScript = """
-        MOUNT_PATH='\(escapedMountPath)'
-        DISK='\(escapedNode)'
-        NTFS3G='\(escapedNTFS3G)'
-        /sbin/umount -f "$DISK" 2>/dev/null || true
-        /usr/sbin/diskutil unmount force "$DISK" 2>/dev/null || true
-        sleep 0.5
-        \(escapedNTFSFix.map { "NTFSFIX='\($0)'; \"$NTFSFIX\" \"$DISK\" || true; sleep 0.3" } ?? "")
-        /sbin/umount -f "$MOUNT_PATH" 2>/dev/null || true
-        if [ ! -d "$MOUNT_PATH" ]; then /bin/mkdir -p "$MOUNT_PATH"; fi
-        "$NTFS3G" "$DISK" "$MOUNT_PATH" -o auto_xattr -o volname='\(volName)' -o local -o remove_hiberfile
+        \(Self.ntfs3gUnmountScript(
+            escapedNode: escapedNode,
+            escapedMountPath: escapedMountPath,
+            escapedNtfsfix: nil
+        ))
+        \(Self.ntfs3gMountScript(
+            escapedMountPath: escapedMountPath,
+            escapedNode: escapedNode,
+            escapedNTFS3G: escapedNTFS3G,
+            escapedNtfsfix: escapedNTFSFix,
+            volName: volName
+        ))
         """
 
         let (_, exitCode, stderr) = try await Shell.runShellScriptWithSudoDetailed(mountScript)
@@ -96,6 +98,88 @@ final class MountService: Sendable {
             let details = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
             throw MountError.mountFailed(code: exitCode, details: details.isEmpty ? nil : details, filesystem: .ntfs)
         }
+    }
+
+    private static func ntfs3gUnmountScript(
+        escapedNode: String,
+        escapedMountPath: String,
+        escapedNtfsfix: String?
+    ) -> String {
+        let ntfsfixBlock = escapedNtfsfix.map {
+            """
+            NTFSFIX='\($0)'
+            RAW="${DISK/disk/rdisk}"
+            if [ ! -e "$RAW" ]; then RAW="$DISK"; fi
+            "$NTFSFIX" -d "$RAW" 2>/dev/null || "$NTFSFIX" -d "$DISK" 2>/dev/null || true
+            """
+        } ?? ""
+        return """
+        DISK='\(escapedNode)'
+        MOUNT_PATH='\(escapedMountPath)'
+        /bin/sync
+        if /sbin/mount | /usr/bin/grep -F " on $MOUNT_PATH (" >/dev/null 2>&1; then
+          /sbin/umount "$MOUNT_PATH" 2>/dev/null || true
+          /bin/sleep 1
+          /sbin/umount -f "$MOUNT_PATH" 2>/dev/null || true
+        fi
+        /usr/bin/pkill -f "ntfs-3g.*$MOUNT_PATH" 2>/dev/null || true
+        /usr/bin/pkill -f "ntfs-3g.*$DISK" 2>/dev/null || true
+        /bin/sleep 0.5
+        if /sbin/mount | /usr/bin/grep -F " on $MOUNT_PATH (" >/dev/null 2>&1; then
+          /usr/sbin/diskutil unmount force "$MOUNT_PATH" 2>/dev/null || true
+        fi
+        /sbin/umount -f "$DISK" 2>/dev/null || true
+        /usr/sbin/diskutil unmount force "$DISK" 2>/dev/null || true
+        /bin/sync
+        /bin/sleep 0.5
+        \(ntfsfixBlock)
+        """
+    }
+
+    private static func ntfs3gMountScript(
+        escapedMountPath: String,
+        escapedNode: String,
+        escapedNTFS3G: String,
+        escapedNtfsfix: String?,
+        volName: String
+    ) -> String {
+        let ntfsfixBlock = escapedNtfsfix.map {
+            """
+            NTFSFIX='\($0)'
+            RAW="${DISK/disk/rdisk}"
+            if [ ! -e "$RAW" ]; then RAW="$DISK"; fi
+            "$NTFSFIX" -d "$RAW" 2>/dev/null || "$NTFSFIX" -d "$DISK" 2>/dev/null || true
+            """
+        } ?? ""
+        return """
+        MOUNT_PATH='\(escapedMountPath)'
+        DISK='\(escapedNode)'
+        NTFS3G='\(escapedNTFS3G)'
+        \(ntfsfixBlock)
+        if [ ! -d "$MOUNT_PATH" ]; then /bin/mkdir -p "$MOUNT_PATH"; fi
+        "$NTFS3G" "$DISK" "$MOUNT_PATH" -o auto_xattr -o volname='\(volName)' -o local -o remove_hiberfile -o sync &
+        FUSE_PID=$!
+        MOUNTED=0
+        for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+          if /sbin/mount | /usr/bin/grep -F " on $MOUNT_PATH (" >/dev/null 2>&1; then
+            MOUNTED=1
+            break
+          fi
+          if ! /bin/kill -0 "$FUSE_PID" 2>/dev/null; then
+            break
+          fi
+          /bin/sleep 0.5
+        done
+        if [ "$MOUNTED" -eq 0 ] && /sbin/mount | /usr/bin/grep -F " on $MOUNT_PATH (" >/dev/null 2>&1; then
+          MOUNTED=1
+        fi
+        if [ "$MOUNTED" -eq 0 ]; then
+          /bin/kill "$FUSE_PID" 2>/dev/null || true
+          echo "ntfs-3g did not mount $MOUNT_PATH" >&2
+          exit 1
+        fi
+        exit 0
+        """
     }
 
     private static func ext4UnmountScript(escapedMountPath: String) -> String {
@@ -215,7 +299,12 @@ final class MountService: Sendable {
         if device.filesystemType == .ext4 {
             unmountScript = Self.ext4UnmountScript(escapedMountPath: escapedMountPoint)
         } else {
-            unmountScript = "/sbin/umount -f '\(escapedNode)'"
+            let ntfsfixPath = Self.resolveNTFSFixPath()?.replacingOccurrences(of: "'", with: "'\\''")
+            unmountScript = Self.ntfs3gUnmountScript(
+                escapedNode: escapedNode,
+                escapedMountPath: escapedMountPoint,
+                escapedNtfsfix: ntfsfixPath
+            )
         }
 
         let result = try await Shell.runShellScriptWithSudo(unmountScript)
@@ -239,10 +328,14 @@ final class MountService: Sendable {
             /usr/sbin/diskutil eject '\(escapedNode)'
             """
         } else {
+            let ntfsfixPath = Self.resolveNTFSFixPath()?.replacingOccurrences(of: "'", with: "'\\''")
             ejectScript = """
-            /sbin/umount -f '\(escapedNode)' 2>/dev/null || true; \
-            /usr/sbin/diskutil unmount force '\(escapedNode)' 2>/dev/null || true; \
-            sleep 0.5; \
+            \(Self.ntfs3gUnmountScript(
+                escapedNode: escapedNode,
+                escapedMountPath: escapedMountPoint,
+                escapedNtfsfix: ntfsfixPath
+            ))
+            sleep 0.5
             /usr/sbin/diskutil eject '\(escapedNode)'
             """
         }
@@ -265,7 +358,14 @@ final class MountService: Sendable {
             throw MountError.alreadyReadOnly
         }
 
-        _ = try? await Shell.runWithSudo("/sbin/umount", arguments: ["-f", device.diskNode])
+        _ = try? await Shell.runShellScriptWithSudo(
+            Self.ntfs3gUnmountScript(
+                escapedNode: device.diskNode.replacingOccurrences(of: "'", with: "'\\''"),
+                escapedMountPath: (device.mountPoint ?? "/Volumes/\(device.displayName)")
+                    .replacingOccurrences(of: "'", with: "'\\''"),
+                escapedNtfsfix: Self.resolveNTFSFixPath()?.replacingOccurrences(of: "'", with: "'\\''")
+            )
+        )
         try await Task.sleep(nanoseconds: 500_000_000)
         _ = try? await Shell.run("/usr/sbin/diskutil", arguments: ["mount", device.diskNode])
     }
@@ -316,8 +416,8 @@ enum MountError: LocalizedError, Sendable {
                 message += """
 
                 Or in Terminal:
-                sudo ntfsfix /dev/diskXsY
-                sudo ntfs-3g /dev/diskXsY /Volumes/YourDisk -o remove_hiberfile -o local
+                sudo ntfsfix -d /dev/diskXsY
+                sudo ntfs-3g /dev/diskXsY /Volumes/YourDisk -o remove_hiberfile -o local -o sync
                 """
             } else {
                 message += """

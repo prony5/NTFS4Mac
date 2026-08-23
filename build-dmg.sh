@@ -6,7 +6,7 @@ cd "$SCRIPT_DIR"
 
 APP_NAME="NTFS4Mac"
 BUNDLE_ID="com.ntfs4mac.app"
-VERSION="1.0.0"
+VERSION="$(tr -d '[:space:]' < VERSION)"
 BUILD_DIR=".build/release"
 APP_BUNDLE="$BUILD_DIR/$APP_NAME.app"
 DMG_OUTPUT="$BUILD_DIR/$APP_NAME-$VERSION.dmg"
@@ -25,6 +25,9 @@ mkdir -p "$APP_BUNDLE/Contents/Resources"
 
 # Copy binary
 cp ".build/release/NTFS4Mac" "$APP_BUNDLE/Contents/MacOS/"
+
+# Bundle VERSION file (fallback for AppInfo)
+cp VERSION "$APP_BUNDLE/Contents/Resources/VERSION"
 
 # Create Info.plist
 cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST

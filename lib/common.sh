@@ -70,6 +70,87 @@ find_ntfs3g() {
 }
 
 # ============================================================
+# Find ntfsfix binary
+# ============================================================
+find_ntfsfix() {
+    local path
+    path="$(which ntfsfix 2>/dev/null)" || true
+    [ -n "$path" ] && echo "$path" && return 0
+
+    for p in /opt/homebrew/bin/ntfsfix /usr/local/bin/ntfsfix; do
+        [ -f "$p" ] && echo "$p" && return 0
+    done
+
+    return 1
+}
+
+# Safely unmount ntfs-3g and clear NTFS dirty flag for Linux/Windows
+unmount_ntfs3g_volume() {
+    local dev="$1"
+    local mount_path="${2:-}"
+    local raw_dev ntfsfix
+
+    if [ -z "$mount_path" ]; then
+        local vol_name
+        vol_name="$(diskutil info "$dev" 2>/dev/null | grep "Volume Name:" | awk -F': ' '{print $2}' | xargs)" || true
+        mount_path="/Volumes/${vol_name:-$(dev_name "$dev")}"
+    fi
+
+    sync
+    if mount | grep -qF " on $mount_path ("; then
+        umount "$mount_path" 2>/dev/null || true
+        sleep 1
+        umount -f "$mount_path" 2>/dev/null || true
+    fi
+    pkill -f "ntfs-3g.*$mount_path" 2>/dev/null || true
+    pkill -f "ntfs-3g.*$(dev_name "$dev")" 2>/dev/null || true
+    sleep 0.5
+    if mount | grep -qF " on $mount_path ("; then
+        diskutil unmount force "$mount_path" 2>/dev/null || true
+    fi
+    umount -f "$dev" 2>/dev/null || true
+    diskutil unmount force "$dev" 2>/dev/null || true
+    sync
+    sleep 0.5
+
+    run_ntfsfix "$dev"
+}
+
+# Clear NTFS dirty flag (-d) so Linux/Windows can mount the volume
+run_ntfsfix() {
+    local dev="$1"
+    local raw_dev="${dev/disk/rdisk}"
+    local ntfsfix
+
+    ntfsfix="$(find_ntfsfix)" || return 0
+    [ -e "$raw_dev" ] || raw_dev="$dev"
+    "$ntfsfix" -d "$raw_dev" 2>/dev/null || "$ntfsfix" -d "$dev" 2>/dev/null || true
+}
+
+# Mount NTFS read-write via ntfs-3g (background daemon)
+mount_ntfs3g_volume() {
+    local dev="$1"
+    local mount_path="$2"
+    local ntfs3g="$3"
+    local vol_name="$4"
+    local fuse_pid
+
+    [ -d "$mount_path" ] || mkdir -p "$mount_path"
+    run_ntfsfix "$dev"
+
+    "$ntfs3g" "$dev" "$mount_path" \
+        -o auto_xattr -o "volname=$vol_name" -o local -o remove_hiberfile -o sync &
+    fuse_pid=$!
+
+    if wait_for_mount_point "$mount_path" "$fuse_pid"; then
+        return 0
+    fi
+
+    kill "$fuse_pid" 2>/dev/null || true
+    return 1
+}
+
+# ============================================================
 # Find ext4fuse binary
 # ============================================================
 find_ext4fuse() {

@@ -27,74 +27,34 @@ mount_ntfs_device() {
     local device="$1"
     local dev="$(dev_path "$device")"
 
-    if mount | grep -q "ntfs-3g.*$(dev_name "$dev")"; then
+    local vol_name
+    vol_name="$(diskutil info "$dev" 2>/dev/null | grep "Volume Name:" | awk -F': ' '{print $2}' | xargs)" || true
+    vol_name="${vol_name:-$(dev_name "$dev")}"
+    local mount_path="/Volumes/$vol_name"
+
+    if mount | grep -qF " on $mount_path (" && mount | grep -qE "ntfs-3g|fuse-t|macfuse"; then
         warn "Already mounted as read-write via ntfs-3g."
         return 0
     fi
 
-    local vol_name mount_point
-    vol_name="$(diskutil info "$dev" 2>/dev/null | grep "Volume Name:" | awk -F': ' '{print $2}')" || true
-    vol_name="${vol_name:-$(dev_name "$dev")}"
-
-    mount_point="$(diskutil info "$dev" 2>/dev/null | grep "Mount Point:" | awk -F': ' '{print $2}')" || true
-
-    if [ -n "$mount_point" ]; then
+    if mount | grep -qF " on $mount_path ("; then
         info "Unmounting macOS read-only mount..."
-        sudo umount -f "$dev" 2>/dev/null || \
-            sudo diskutil unmount force "$dev" >/dev/null 2>&1 || \
-            error "Failed to unmount $dev. Close any apps using this volume and try again."
+        unmount_ntfs3g_volume "$dev" "$mount_path"
+        mount | grep -qF " on $mount_path (" && \
+            error "Failed to unmount $mount_path. Close any apps using this volume and try again."
         ok "Unmounted."
-        sleep 0.5
     fi
-
-    sudo mkdir -p "/Volumes/$vol_name"
 
     local ntfs3g
     ntfs3g="$(find_ntfs3g)" || error "ntfs-3g not found. Run: brew install ntfs-3g-mac"
 
     info "Mounting $dev as read-write..."
-    local mount_args=(
-        "$ntfs3g"
-        "$dev"
-        "/Volumes/$vol_name"
-        -o auto_xattr
-        -o volname="$vol_name"
-        -o local
-    )
-
-    local mount_result=0
-    if command -v timeout >/dev/null 2>&1; then
-        timeout 15 sudo "${mount_args[@]}" 2>&1 || mount_result=$?
-    elif command -v gtimeout >/dev/null 2>&1; then
-        gtimeout 15 sudo "${mount_args[@]}" 2>&1 || mount_result=$?
-    else
-        sudo "${mount_args[@]}" 2>&1 &
-        local pid=$!
-        local waited=0
-        while kill -0 "$pid" 2>/dev/null && [ $waited -lt 15 ]; do
-            sleep 1
-            waited=$((waited + 1))
-        done
-        if kill -0 "$pid" 2>/dev/null; then
-            sudo kill -9 "$pid" 2>/dev/null
-            mount_result=124
-        else
-            wait "$pid" 2>/dev/null
-            mount_result=$?
-        fi
-    fi
-
-    if [ $mount_result -eq 0 ]; then
-        ok "Mounted: /Volumes/$vol_name"
+    if mount_ntfs3g_volume "$dev" "$mount_path" "$ntfs3g" "$vol_name"; then
+        ok "Mounted: $mount_path"
         sudo touch "/tmp/ntfs_mounted_$(dev_name "$dev")" 2>/dev/null || true
-    elif [ $mount_result -eq 124 ]; then
-        error "Mount timed out (15s). Possible causes:
-  - Windows Fast Startup / Hibernation enabled on the drive
-  - Corrupted NTFS filesystem
-  Fix: Fully shut down Windows (not sleep), or run: ntfsfix /dev/$device"
     else
-        error "Mount failed (exit code $mount_result).
-  Try: ntfs-3g $dev /Volumes/$vol_name -o force"
+        error "Mount failed.
+  Fix: Fully shut down Windows (not sleep), or run: sudo ntfsfix -d $dev"
     fi
 }
 
@@ -138,9 +98,20 @@ unmount_device() {
     local fs_kind
     fs_kind="$(detect_fs_type "$dev")" || fs_kind="unknown"
 
-    if mount | grep -q "ntfs-3g.*$(dev_name "$dev")"; then
-        info "Unmounting ntfs-3g mount..."
-        sudo umount -f "$dev" 2>/dev/null || error "Failed to unmount $dev."
+    local vol_name mount_path
+    vol_name="$(diskutil info "$dev" 2>/dev/null | grep "Volume Name:" | awk -F': ' '{print $2}' | xargs)" || true
+    vol_name="${vol_name:-$(dev_name "$dev")}"
+    mount_path="/Volumes/$vol_name"
+
+    if [ "$fs_kind" = "ntfs" ] || mount | grep -qE "ntfs-3g|fuse-t.*$vol_name"; then
+        if mount | grep -qF " on $mount_path ("; then
+            info "Unmounting ntfs-3g mount..."
+            unmount_ntfs3g_volume "$dev" "$mount_path"
+            mount | grep -qF " on $mount_path (" && error "Failed to unmount $mount_path."
+        else
+            info "Unmounting $dev..."
+            sudo diskutil unmount force "$dev" >/dev/null 2>&1 || error "Failed to unmount $dev."
+        fi
     elif [ "$fs_kind" = "ext4" ]; then
         local vol_name media_name mount_point
         vol_name="$(diskutil info "$dev" 2>/dev/null | grep "Volume Name:" | awk -F': ' '{print $2}' | xargs)" || true
@@ -176,9 +147,14 @@ eject_device() {
     local fs_kind
     fs_kind="$(detect_fs_type "$dev")" || fs_kind="unknown"
 
-    if mount | grep -q "ntfs-3g.*$(dev_name "$dev")"; then
+    local vol_name mount_path
+    vol_name="$(diskutil info "$dev" 2>/dev/null | grep "Volume Name:" | awk -F': ' '{print $2}' | xargs)" || true
+    vol_name="${vol_name:-$(dev_name "$dev")}"
+    mount_path="/Volumes/$vol_name"
+
+    if [ "$fs_kind" = "ntfs" ] && mount | grep -qF " on $mount_path ("; then
         info "Unmounting ntfs-3g mount..."
-        sudo umount -f "$dev" 2>/dev/null || true
+        unmount_ntfs3g_volume "$dev" "$mount_path"
         sudo rm -f "/tmp/ntfs_mounted_$(dev_name "$dev")" 2>/dev/null || true
         sleep 0.5
     fi
@@ -214,9 +190,15 @@ restore_readonly() {
     fs_kind="$(detect_fs_type "$dev")" || error "Unknown filesystem on $dev."
     [ "$fs_kind" = "ext4" ] && error "Restore to read-only is only supported for NTFS volumes."
 
-    if mount | grep -q "ntfs-3g.*$(dev_name "$dev")"; then
+    local vol_name mount_path
+    vol_name="$(diskutil info "$dev" 2>/dev/null | grep "Volume Name:" | awk -F': ' '{print $2}' | xargs)" || true
+    vol_name="${vol_name:-$(dev_name "$dev")}"
+    mount_path="/Volumes/$vol_name"
+
+    if mount | grep -qF " on $mount_path (" && mount | grep -qE "ntfs-3g|fuse-t|macfuse"; then
         info "Unmounting ntfs-3g mount..."
-        sudo umount -f "$dev" 2>/dev/null || error "Failed to unmount $dev."
+        unmount_ntfs3g_volume "$dev" "$mount_path"
+        mount | grep -qF " on $mount_path (" && error "Failed to unmount $mount_path."
 
         sudo rm -f "/tmp/ntfs_mounted_$(dev_name "$dev")" 2>/dev/null || true
         sleep 0.5
