@@ -24,6 +24,22 @@ enum Shell {
         return (stdout, exitCode)
     }
 
+    /// Runs a shell script with administrator privileges via a temp file to avoid AppleScript quoting issues.
+    static func runShellScriptWithSudoDetailed(_ script: String) async throws -> (stdout: String, exitCode: Int32, stderr: String) {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ntfs4mac-\(UUID().uuidString).sh")
+        let content = "#!/bin/sh\n" + script.trimmingCharacters(in: .whitespacesAndNewlines) + "\n"
+        try content.write(to: tempURL, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: tempURL) }
+
+        return try await runWithSudoDetailed("/bin/sh", arguments: [tempURL.path])
+    }
+
+    static func runShellScriptWithSudo(_ script: String) async throws -> (stdout: String, exitCode: Int32) {
+        let (stdout, exitCode, _) = try await runShellScriptWithSudoDetailed(script)
+        return (stdout, exitCode)
+    }
+
     static func runWithSudoDetailed(_ command: String, arguments: [String] = []) async throws -> (stdout: String, exitCode: Int32, stderr: String) {
         var parts = [command]
         for arg in arguments {
@@ -37,7 +53,9 @@ enum Shell {
             }
         }
         let fullCommand = parts.joined(separator: " ")
-        let escapedForAppleScript = fullCommand.replacingOccurrences(of: "\"", with: "\\\"")
+        let escapedForAppleScript = fullCommand
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
 
         let script = "do shell script \"\(escapedForAppleScript)\" with administrator privileges"
 

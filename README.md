@@ -1,6 +1,6 @@
 # NTFS4Mac
 
-A lightweight macOS tool for NTFS read/write support. Built with SwiftUI for macOS 14+ (Sonoma, Sequoia, Tahoe).
+A lightweight macOS tool for NTFS read/write and ext4 read-only support. Built with SwiftUI for macOS 14+ (Sonoma, Sequoia, Tahoe).
 
 <p align="center">
 English | <a href="README_CN.md">简体中文</a>
@@ -11,6 +11,7 @@ English | <a href="README_CN.md">简体中文</a>
 ## Features
 
 - **One-click read-write mount** - Remount NTFS volumes via ntfs-3g with a single click
+- **ext4 read-only mount** - Mount Linux ext4 drives via ext4fuse (macOS has no native ext4 support)
 - **Auto device detection** - File system watcher + polling detects new drives in real time
 - **Open in Finder** - Quick access to mounted volumes
 - **Native macOS experience** - SwiftUI, dark mode, minimal UI
@@ -18,7 +19,7 @@ English | <a href="README_CN.md">简体中文</a>
 
 ## How It Works
 
-macOS natively mounts NTFS volumes as read-only. This tool remounts them in read-write mode using the [ntfs-3g](https://github.com/tuxera/ntfs-3g) driver via [fuse-t](https://github.com/macos-fuse-t/fuse-t).
+macOS natively mounts NTFS volumes as read-only and does not support ext4 at all. This tool remounts NTFS in read-write mode using [ntfs-3g](https://github.com/tuxera/ntfs-3g), and mounts ext4 in read-only mode using [ext4fuse](https://github.com/gerard/ext4fuse), both via [fuse-t](https://github.com/macos-fuse-t/fuse-t).
 
 ## Requirements
 
@@ -45,6 +46,7 @@ curl -fsSL https://raw.githubusercontent.com/zhouyeyu/NTFS4Mac/main/setup.sh | b
 | **macOS 14+** | Required | System Settings > Software Update |
 | **fuse-t** | File system framework | Download from [fuse-t releases](https://github.com/macos-fuse-t/fuse-t/releases) |
 | **ntfs-3g** | NTFS read-write driver | `brew tap gromgit/fuse && brew install ntfs-3g-mac` |
+| **ext4fuse** | ext4 read-only driver | `brew tap gromgit/fuse && brew install ext4fuse-mac` |
 
 ### Install fuse-t
 
@@ -85,10 +87,13 @@ make install
 
 ### GUI
 
-Launch `NTFS4Mac.app`. Insert an NTFS drive. Click **Mount RW**.
+Launch `NTFS4Mac.app`. Insert an NTFS or ext4 drive.
 
-- **RW** (green) = Read-write mode via fuse-t
-- **RO** (orange) = Read-only mode (macOS native)
+- **NTFS**: Click **Mount RW** for read-write access
+- **ext4**: Click **Mount** for read-only access (ext4 write support is not available on macOS)
+
+- **RW** (green) = Read-write mode (NTFS via ntfs-3g)
+- **RO** (orange) = Read-only mode
 - **--** (gray) = Not mounted
 
 Click the folder icon to open the volume in Finder.
@@ -96,12 +101,12 @@ Click the folder icon to open the volume in Finder.
 ### CLI
 
 ```bash
-ntfs-cli list               # List all NTFS devices
-ntfs-cli mount disk4s1      # Mount as read-write
+ntfs-cli list               # List all NTFS and ext4 devices
+ntfs-cli mount disk4s1      # Mount (NTFS: RW, ext4: RO)
 ntfs-cli unmount disk4s1    # Unmount
 ntfs-cli eject disk4s1      # Eject (safe to remove)
-ntfs-cli restore disk4s1    # Restore macOS read-only
-ntfs-cli watch              # Auto-mount new NTFS devices
+ntfs-cli restore disk4s1    # Restore NTFS to macOS read-only
+ntfs-cli watch              # Auto-mount new devices
 ntfs-cli status             # Show mount status
 ntfs-cli deps               # Check dependencies
 ```

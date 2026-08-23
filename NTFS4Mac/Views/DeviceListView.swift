@@ -11,7 +11,7 @@ struct DeviceListView: View {
         VStack(spacing: 0) {
             // Toolbar
             HStack {
-                Text("NTFS Devices")
+                Text("External Devices")
                     .font(.title2)
                     .fontWeight(.bold)
                 Spacer()
@@ -32,9 +32,9 @@ struct DeviceListView: View {
             } else if deviceService.devices.isEmpty {
                 Spacer()
                 ContentUnavailableView {
-                    Label("No NTFS Devices", systemImage: "externaldrive.badge.xmark")
+                    Label("No Devices Found", systemImage: "externaldrive.badge.xmark")
                 } description: {
-                    Text("Connect an external NTFS drive to get started")
+                    Text("Connect an external NTFS or ext4 drive to get started")
                 }
                 Spacer()
             } else {
@@ -43,6 +43,7 @@ struct DeviceListView: View {
                         ForEach(deviceService.devices) { device in
                             DeviceRow(
                                 device: device,
+                                isOperating: isOperating,
                                 onMount: { operate(.mount(device)) },
                                 onUnmount: { operate(.unmount(device)) },
                                 onRestore: { operate(.restore(device)) },
@@ -63,7 +64,6 @@ struct DeviceListView: View {
                 Text("\(deviceService.devices.count) device(s) found")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Spacer()
                 if rwCount > 0 {
                     Circle().fill(.green).frame(width: 6, height: 6)
                     Text("\(rwCount) RW").font(.caption).foregroundStyle(.secondary)
@@ -75,6 +75,13 @@ struct DeviceListView: View {
                 if !mountService.isNTFS3GAvailable {
                     Text("ntfs-3g not found").font(.caption).foregroundStyle(.red)
                 }
+                if !mountService.isExt4FuseAvailable {
+                    Text("ext4fuse not found").font(.caption).foregroundStyle(.red)
+                }
+                Spacer()
+                Text("v\(AppInfo.version)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             .padding(.horizontal)
             .padding(.vertical, 6)
@@ -95,10 +102,20 @@ struct DeviceListView: View {
     }
 
     private func openInFinder(_ device: NTFSDevice) {
-        if let mountPoint = device.mountPoint {
-            let url = URL(fileURLWithPath: mountPoint)
-            NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: url.path)
+        guard let mountPoint = device.mountPoint else { return }
+
+        guard device.isAccessible else {
+            errorMessage = """
+            Volume is not accessible. Unmount and mount again to fix permissions.
+            If the problem persists, run in Terminal:
+            sudo umount -f \(mountPoint)
+            """
+            showError = true
+            return
         }
+
+        let url = URL(fileURLWithPath: mountPoint, isDirectory: true)
+        NSWorkspace.shared.open(url)
     }
 
     private func operate(_ op: Operation) {

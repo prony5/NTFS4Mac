@@ -9,28 +9,39 @@ final class DeviceService {
     var isRefreshing = false
 
     private var ntfs3gPath: String?
+    private var ext4fusePath: String?
 
     init() {
         resolveNTFS3GPath()
+        resolveExt4FusePath()
     }
 
-    // MARK: - Find ntfs-3g binary
+    // MARK: - Find binaries
 
     private func resolveNTFS3GPath() {
-        let candidates = [
+        ntfs3gPath = Self.findExecutable(named: "ntfs-3g", candidates: [
             "/opt/homebrew/bin/ntfs-3g",
             "/usr/local/bin/ntfs-3g"
-        ]
+        ])
+    }
+
+    private func resolveExt4FusePath() {
+        ext4fusePath = Self.findExecutable(named: "ext4fuse", candidates: [
+            "/opt/homebrew/bin/ext4fuse",
+            "/usr/local/bin/ext4fuse"
+        ])
+    }
+
+    private static func findExecutable(named: String, candidates: [String]) -> String? {
         for path in candidates {
             if FileManager.default.isExecutableFile(atPath: path) {
-                ntfs3gPath = path
-                return
+                return path
             }
         }
         let process = Process()
         let pipe = Pipe()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/which")
-        process.arguments = ["ntfs-3g"]
+        process.arguments = [named]
         process.standardOutput = pipe
         process.standardError = Pipe()
         do {
@@ -39,14 +50,14 @@ final class DeviceService {
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             if let which = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
                !which.isEmpty {
-                ntfs3gPath = which
+                return which
             }
         } catch {}
+        return nil
     }
 
-    var isNTFS3GAvailable: Bool {
-        ntfs3gPath != nil
-    }
+    var isNTFS3GAvailable: Bool { ntfs3gPath != nil }
+    var isExt4FuseAvailable: Bool { ext4fusePath != nil }
 
     // MARK: - Discover Devices
 
@@ -56,21 +67,22 @@ final class DeviceService {
         defer { isRefreshing = false }
 
         do {
-            // Get mount output once
             let mountOutput = try await Shell.run("/sbin/mount")
-
-            // Get external disks
             let output = try await Shell.run("/usr/sbin/diskutil", arguments: ["list", "external", "physical"])
-            let diskIDs = parseDiskIDs(from: output)
+            let diskIDs = parseTopLevelDiskIDs(from: output)
 
             var found: [NTFSDevice] = []
             for diskID in diskIDs {
-                let partitions = try? await Shell.run("/usr/sbin/diskutil", arguments: ["list", "/dev/\(diskID)"])
-                let partIDs = parsePartitionIDs(from: partitions ?? "")
+                let partitionsOutput = try? await Shell.run("/usr/sbin/diskutil", arguments: ["list", "/dev/\(diskID)"])
+                let partIDs = parsePartitionIDs(from: partitionsOutput ?? "")
 
-                for partID in partIDs {
-                    if let device = try? await fetchDeviceInfo(partID, mountOutput: mountOutput) {
-                        found.append(device)
+                if partIDs.isEmpty {
+                    found.append(contentsOf: await discoverWholeDisk(diskID, mountOutput: mountOutput))
+                } else {
+                    for partID in partIDs {
+                        if let device = try? await fetchDeviceInfo(partID, mountOutput: mountOutput) {
+                            found.append(device)
+                        }
                     }
                 }
             }
@@ -82,24 +94,123 @@ final class DeviceService {
 
     // MARK: - Parse diskutil output
 
-    private func parseDiskIDs(from output: String) -> [String] {
-        let pattern = "disk[0-9]+"
+    private func parseTopLevelDiskIDs(from output: String) -> [String] {
+        let pattern = "/dev/(disk[0-9]+) \\("
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
         let range = NSRange(output.startIndex..., in: output)
-        let matches = regex.matches(in: output, range: range)
-        return matches
-            .compactMap { Range($0.range, in: output).map { String(output[$0]) } }
-            .removingDuplicates()
+        return regex.matches(in: output, range: range).compactMap { match in
+            guard match.numberOfRanges > 1,
+                  let swiftRange = Range(match.range(at: 1), in: output) else { return nil }
+            return String(output[swiftRange])
+        }.removingDuplicates()
     }
 
     private func parsePartitionIDs(from output: String) -> [String] {
         let pattern = "(disk[0-9]+s[0-9]+)"
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
         let range = NSRange(output.startIndex..., in: output)
-        let matches = regex.matches(in: output, range: range)
-        return matches
+        return regex.matches(in: output, range: range)
             .compactMap { Range($0.range, in: output).map { String(output[$0]) } }
             .removingDuplicates()
+    }
+
+    // MARK: - Whole disk discovery
+
+    private func discoverWholeDisk(_ diskID: String, mountOutput: String) async -> [NTFSDevice] {
+        let diskNode = "/dev/\(diskID)"
+        let infoOutput = (try? await Shell.run("/usr/sbin/diskutil", arguments: ["info", diskNode])) ?? ""
+        let info = parseDiskutilInfo(infoOutput)
+        let probed = FilesystemProbe.probe(deviceNode: diskNode)
+
+        if probed.isEmpty {
+            if let device = await buildWholeDiskFallback(diskID: diskID, info: info, mountOutput: mountOutput) {
+                return [device]
+            }
+            return []
+        }
+
+        return probed.map { volume in
+            buildProbedDevice(
+                diskID: diskID,
+                info: info,
+                volume: volume,
+                mountOutput: mountOutput
+            )
+        }
+    }
+
+    private func buildWholeDiskFallback(
+        diskID: String,
+        info: [String: String],
+        mountOutput: String
+    ) async -> NTFSDevice? {
+        let content = info["content"] ?? ""
+        guard content == "None" || content.isEmpty else { return nil }
+
+        return NTFSDevice(
+            id: diskID,
+            diskNode: "/dev/\(diskID)",
+            volumeName: info["mediaName"] ?? diskID,
+            fileSystem: "Unknown (Linux?)",
+            filesystemType: .ext4,
+            size: info["diskSize"] ?? "Unknown",
+            usedSpace: "",
+            availableSpace: "",
+            byteOffset: 0,
+            mountPoint: ext4MountInfo(volumeName: info["mediaName"] ?? diskID, deviceID: diskID, mountOutput: mountOutput).mountPoint,
+            isReadWrite: false,
+            isMounted: ext4MountInfo(volumeName: info["mediaName"] ?? diskID, deviceID: diskID, mountOutput: mountOutput).isMounted
+        )
+    }
+
+    private func buildProbedDevice(
+        diskID: String,
+        info: [String: String],
+        volume: ProbedVolume,
+        mountOutput: String
+    ) -> NTFSDevice {
+        let suffix = volume.partitionIndex.map { "p\($0)" } ?? "whole"
+        let id = volume.byteOffset == 0 ? diskID : "\(diskID)@\(suffix)"
+        let mediaName = info["mediaName"] ?? diskID
+        let volumeName = volume.partitionIndex.map { "\(mediaName) (partition \($0))" } ?? mediaName
+
+        return NTFSDevice(
+            id: id,
+            diskNode: "/dev/\(diskID)",
+            volumeName: volumeName,
+            fileSystem: volume.label,
+            filesystemType: volume.filesystemType,
+            size: info["diskSize"] ?? "Unknown",
+            usedSpace: "",
+            availableSpace: "",
+            byteOffset: volume.byteOffset,
+            mountPoint: ext4MountInfo(volumeName: volumeName, deviceID: diskID, mountOutput: mountOutput).mountPoint,
+            isReadWrite: false,
+            isMounted: ext4MountInfo(volumeName: volumeName, deviceID: diskID, mountOutput: mountOutput).isMounted
+        )
+    }
+
+    // MARK: - Filesystem detection
+
+    private static func detectFilesystem(fsType: String, partitionType: String) -> FilesystemType? {
+        if fsType.localizedCaseInsensitiveContains("NTFS")
+            || partitionType.localizedCaseInsensitiveContains("NTFS") {
+            return .ntfs
+        }
+
+        if fsType.localizedCaseInsensitiveContains("ext4")
+            || partitionType.localizedCaseInsensitiveContains("ext4") {
+            return .ext4
+        }
+
+        let isLinux = partitionType.localizedCaseInsensitiveContains("Linux")
+            && !partitionType.localizedCaseInsensitiveContains("Swap")
+            && !partitionType.localizedCaseInsensitiveContains("LVM")
+        if isLinux {
+            return .ext4
+        }
+
+        return nil
     }
 
     // MARK: - Fetch single device info
@@ -108,85 +219,98 @@ final class DeviceService {
         let output = try await Shell.run("/usr/sbin/diskutil", arguments: ["info", "/dev/\(partID)"])
         let info = parseDiskutilInfo(output)
 
-        // Filter: only NTFS (macOS may misreport Type (Bundle) as exfat)
         let fsType = info["fsType"] ?? ""
         let partitionType = info["partitionType"] ?? ""
-        let isNTFS = fsType.localizedCaseInsensitiveContains("NTFS")
-            || partitionType.localizedCaseInsensitiveContains("NTFS")
-        guard isNTFS else {
+        guard let filesystemType = Self.detectFilesystem(fsType: fsType, partitionType: partitionType) else {
             return nil
         }
 
         let volumeName = info["volumeName"] ?? partID
-
-        // Check mount status from mount output
-        // fuse-t mount: "fuse-t:/VolumeName on /Volumes/VolumeName (nfs)"
-        // macOS mount: "/dev/diskXsY on /Volumes/VolumeName (ntfs, ...read-only...)"
-
         var isRW = false
         var isMounted = false
         var mountPoint: String? = nil
 
-        for line in mountOutput.components(separatedBy: "\n") {
-            // Check for fuse-t mount (read-write)
-            if line.contains("fuse-t:/\(volumeName)") || line.contains("fuse-t:/\(volumeName) ") {
-                // Extract mount point
-                if let range = line.range(of: " on ") {
-                    let afterOn = line[range.upperBound...]
-                    if let endRange = afterOn.range(of: " (") {
-                        let mp = String(afterOn[..<endRange.lowerBound])
-                        // Verify the mount is actually writable
-                        if FileManager.default.isWritableFile(atPath: mp) {
-                            isRW = true
-                            isMounted = true
-                            mountPoint = mp
-                        } else {
-                            // fuse-t mount exists but not writable - mark as mounted but not RW
-                            isMounted = true
-                            mountPoint = mp
-                        }
+        switch filesystemType {
+        case .ntfs:
+            for line in mountOutput.components(separatedBy: "\n") {
+                if line.contains("fuse-t:/\(volumeName)") || line.contains("fuse-t:/\(volumeName) ") {
+                    if let mp = extractMountPoint(from: line) {
+                        isMounted = true
+                        mountPoint = mp
+                        isRW = FileManager.default.isWritableFile(atPath: mp)
                     }
+                    break
                 }
-                break
+                if line.contains(partID) && (line.contains("macfuse") || line.contains("ntfs-3g")) {
+                    isRW = true
+                    isMounted = true
+                    mountPoint = extractMountPoint(from: line)
+                    break
+                }
+                if line.contains(partID) && line.contains("ntfs") {
+                    isMounted = true
+                    mountPoint = extractMountPoint(from: line)
+                }
             }
 
-            // Check for ntfs-3g / MacFUSE mount (read-write)
-            if line.contains(partID) && (line.contains("macfuse") || line.contains("ntfs-3g")) {
-                isRW = true
-                isMounted = true
-                if let range = line.range(of: " on ") {
-                    let afterOn = line[range.upperBound...]
-                    if let endRange = afterOn.range(of: " (") {
-                        mountPoint = String(afterOn[..<endRange.lowerBound])
-                    }
-                }
-                break
-            }
+        case .ext4:
+            let mountInfo = ext4MountInfo(
+                volumeName: volumeName.isEmpty ? partID : volumeName,
+                deviceID: partID,
+                mountOutput: mountOutput
+            )
+            isMounted = mountInfo.isMounted
+            mountPoint = mountInfo.mountPoint
+        }
 
-            // Check for macOS native mount (read-only)
-            if line.contains(partID) && line.contains("ntfs") {
-                isMounted = true
-                if let range = line.range(of: " on ") {
-                    let afterOn = line[range.upperBound...]
-                    if let endRange = afterOn.range(of: " (") {
-                        mountPoint = String(afterOn[..<endRange.lowerBound])
-                    }
-                }
-            }
+        let displayFS: String
+        switch filesystemType {
+        case .ntfs:
+            displayFS = info["fsType"] ?? "NTFS"
+        case .ext4:
+            displayFS = fsType.localizedCaseInsensitiveContains("ext4") ? fsType : "ext4 (Linux)"
         }
 
         return NTFSDevice(
             id: partID,
             diskNode: "/dev/\(partID)",
             volumeName: volumeName,
-            fileSystem: info["fsType"] ?? "NTFS",
+            fileSystem: displayFS,
+            filesystemType: filesystemType,
             size: info["diskSize"] ?? "Unknown",
             usedSpace: info["usedSpace"] ?? "",
             availableSpace: info["freeSpace"] ?? "",
+            byteOffset: 0,
             mountPoint: mountPoint,
             isReadWrite: isRW,
             isMounted: isMounted
         )
+    }
+
+    private func ext4MountInfo(
+        volumeName: String,
+        deviceID: String,
+        mountOutput: String
+    ) -> (isMounted: Bool, mountPoint: String?) {
+        let expectedMount = "/Volumes/\(volumeName.isEmpty ? deviceID : volumeName)"
+
+        for line in mountOutput.components(separatedBy: "\n") {
+            guard line.contains("ext4fuse") || line.contains("fuse-ext2") else { continue }
+            guard let mountPoint = extractMountPoint(from: line) else { continue }
+            guard mountPoint == expectedMount else { continue }
+
+            let accessible = FileManager.default.isReadableFile(atPath: mountPoint)
+            return (accessible, mountPoint)
+        }
+
+        return (false, nil)
+    }
+
+    private func extractMountPoint(from line: String) -> String? {
+        guard let range = line.range(of: " on ") else { return nil }
+        let afterOn = line[range.upperBound...]
+        guard let endRange = afterOn.range(of: " (") else { return nil }
+        return String(afterOn[..<endRange.lowerBound])
     }
 
     private func parseDiskutilInfo(_ output: String) -> [String: String] {
@@ -203,6 +327,10 @@ final class DeviceService {
                 result["partitionType"] = value
             case "Volume Name":
                 result["volumeName"] = (value == "Not applicable (no file system)") ? "" : value
+            case "Device / Media Name":
+                result["mediaName"] = value
+            case "Content (IOContent)":
+                result["content"] = value.trimmingCharacters(in: .whitespaces)
             case "Mount Point":
                 result["mountPoint"] = (value == "Not mounted") ? nil : value
             case "Disk Size":

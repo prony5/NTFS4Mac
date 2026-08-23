@@ -2,38 +2,42 @@
 # Mount, unmount, restore operations
 
 # ============================================================
-# Mount device as read-write via ntfs-3g
+# Mount device (dispatches by filesystem type)
 # ============================================================
 mount_device() {
     local device="$1"
     local dev="$(dev_path "$device")"
 
-    # Verify device exists
     diskutil info "$dev" &>/dev/null || error "Device $dev not found."
 
-    # Verify it's NTFS (macOS may misreport Type (Bundle) as exfat)
-    local fs_type partition_type
-    fs_type="$(diskutil info "$dev" 2>/dev/null | grep "Type (Bundle):" | awk -F': ' '{print $2}')" || true
-    partition_type="$(diskutil info "$dev" 2>/dev/null | grep "Partition Type:" | awk -F': ' '{print $2}')" || true
-    [[ "$fs_type" != *NTFS* && "$fs_type" != *ntfs* \
-        && "$partition_type" != *NTFS* && "$partition_type" != *ntfs* ]] && \
-        error "$dev is not NTFS (bundle: ${fs_type:-unknown}, partition: ${partition_type:-unknown})."
+    local fs_kind
+    fs_kind="$(detect_fs_type "$dev")" || \
+        error "$dev is not a supported filesystem (NTFS or ext4)."
 
-    # Check if already mounted read-write via ntfs-3g
+    case "$fs_kind" in
+        ntfs) mount_ntfs_device "$device" ;;
+        ext4) mount_ext4_device "$device" ;;
+    esac
+}
+
+# ============================================================
+# Mount NTFS device as read-write via ntfs-3g
+# ============================================================
+mount_ntfs_device() {
+    local device="$1"
+    local dev="$(dev_path "$device")"
+
     if mount | grep -q "ntfs-3g.*$(dev_name "$dev")"; then
         warn "Already mounted as read-write via ntfs-3g."
         return 0
     fi
 
-    # Get volume name
     local vol_name mount_point
     vol_name="$(diskutil info "$dev" 2>/dev/null | grep "Volume Name:" | awk -F': ' '{print $2}')" || true
     vol_name="${vol_name:-$(dev_name "$dev")}"
 
-    # Get current mount point (if mounted read-only by macOS)
     mount_point="$(diskutil info "$dev" 2>/dev/null | grep "Mount Point:" | awk -F': ' '{print $2}')" || true
 
-    # Unmount existing read-only mount
     if [ -n "$mount_point" ]; then
         info "Unmounting macOS read-only mount..."
         sudo umount -f "$dev" 2>/dev/null || \
@@ -43,14 +47,11 @@ mount_device() {
         sleep 0.5
     fi
 
-    # Ensure mount point directory exists
     sudo mkdir -p "/Volumes/$vol_name"
 
-    # Find ntfs-3g
     local ntfs3g
     ntfs3g="$(find_ntfs3g)" || error "ntfs-3g not found. Run: brew install ntfs-3g-mac"
 
-    # Mount via ntfs-3g
     info "Mounting $dev as read-write..."
     local mount_args=(
         "$ntfs3g"
@@ -61,7 +62,6 @@ mount_device() {
         -o local
     )
 
-    # Run with timeout to avoid hanging (Windows Fast Startup issue)
     local mount_result=0
     if command -v timeout >/dev/null 2>&1; then
         timeout 15 sudo "${mount_args[@]}" 2>&1 || mount_result=$?
@@ -86,7 +86,6 @@ mount_device() {
 
     if [ $mount_result -eq 0 ]; then
         ok "Mounted: /Volumes/$vol_name"
-        # Create marker for watch mode
         sudo touch "/tmp/ntfs_mounted_$(dev_name "$dev")" 2>/dev/null || true
     elif [ $mount_result -eq 124 ]; then
         error "Mount timed out (15s). Possible causes:
@@ -100,25 +99,71 @@ mount_device() {
 }
 
 # ============================================================
+# Mount ext4 device as read-only via ext4fuse
+# ============================================================
+mount_ext4_device() {
+    local device="$1"
+    local dev="$(dev_path "$device")"
+
+    local vol_name media_name
+    vol_name="$(diskutil info "$dev" 2>/dev/null | grep "Volume Name:" | awk -F': ' '{print $2}' | xargs)" || true
+    media_name="$(diskutil info "$dev" 2>/dev/null | grep "Device / Media Name:" | awk -F': ' '{print $2}' | xargs)" || true
+    if [ "$vol_name" = "Not applicable (no file system)" ] || [ -z "$vol_name" ]; then
+        vol_name="${media_name:-$(dev_name "$dev")}"
+    fi
+
+    if mount | grep -qF " on /Volumes/$vol_name ("; then
+        warn "Already mounted at /Volumes/$vol_name"
+        return 0
+    fi
+
+    local ext4fuse
+    ext4fuse="$(find_ext4fuse)" || error "ext4fuse not found. Run: brew install ext4fuse-mac"
+
+    info "Mounting $dev as read-only (ext4)..."
+    if mount_ext4_fuse "$dev" "/Volumes/$vol_name" "$ext4fuse"; then
+        ok "Mounted: /Volumes/$vol_name (read-only)"
+        sudo touch "/tmp/ext4_mounted_$(dev_name "$dev")" 2>/dev/null || true
+    else
+        error "Mount failed. Try: sudo ext4fuse $dev /Volumes/$vol_name -o allow_other -o defer_permissions -o uid=\$(id -u) -o gid=\$(id -g) &"
+    fi
+}
+
+# ============================================================
 # Unmount device
 # ============================================================
 unmount_device() {
     local device="$1"
     local dev="$(dev_path "$device")"
+    local fs_kind
+    fs_kind="$(detect_fs_type "$dev")" || fs_kind="unknown"
 
-    # Try ntfs-3g unmount first
     if mount | grep -q "ntfs-3g.*$(dev_name "$dev")"; then
         info "Unmounting ntfs-3g mount..."
-        sudo umount -f "$dev" 2>/dev/null || \
-            error "Failed to unmount $dev."
+        sudo umount -f "$dev" 2>/dev/null || error "Failed to unmount $dev."
+    elif [ "$fs_kind" = "ext4" ]; then
+        local vol_name media_name mount_point
+        vol_name="$(diskutil info "$dev" 2>/dev/null | grep "Volume Name:" | awk -F': ' '{print $2}' | xargs)" || true
+        media_name="$(diskutil info "$dev" 2>/dev/null | grep "Device / Media Name:" | awk -F': ' '{print $2}' | xargs)" || true
+        if [ "$vol_name" = "Not applicable (no file system)" ] || [ -z "$vol_name" ]; then
+            vol_name="${media_name:-$(dev_name "$dev")}"
+        fi
+        mount_point="/Volumes/$vol_name"
+        if mount | grep -qF " on $mount_point ("; then
+            info "Unmounting ext4fuse mount..."
+            unmount_ext4_volume "$mount_point"
+            mount | grep -qF " on $mount_point (" && error "Failed to unmount $mount_point."
+        else
+            info "Unmounting $dev..."
+            sudo diskutil unmount force "$dev" >/dev/null 2>&1 || error "Failed to unmount $dev."
+        fi
     else
         info "Unmounting $dev..."
-        sudo diskutil unmount force "$dev" >/dev/null 2>&1 || \
-            error "Failed to unmount $dev."
+        sudo diskutil unmount force "$dev" >/dev/null 2>&1 || error "Failed to unmount $dev."
     fi
 
-    # Clean marker
     sudo rm -f "/tmp/ntfs_mounted_$(dev_name "$dev")" 2>/dev/null || true
+    sudo rm -f "/tmp/ext4_mounted_$(dev_name "$dev")" 2>/dev/null || true
     ok "Unmounted."
 }
 
@@ -128,8 +173,9 @@ unmount_device() {
 eject_device() {
     local device="$1"
     local dev="$(dev_path "$device")"
+    local fs_kind
+    fs_kind="$(detect_fs_type "$dev")" || fs_kind="unknown"
 
-    # First unmount if mounted via ntfs-3g
     if mount | grep -q "ntfs-3g.*$(dev_name "$dev")"; then
         info "Unmounting ntfs-3g mount..."
         sudo umount -f "$dev" 2>/dev/null || true
@@ -137,30 +183,44 @@ eject_device() {
         sleep 0.5
     fi
 
+    if [ "$fs_kind" = "ext4" ]; then
+        local vol_name media_name
+        vol_name="$(diskutil info "$dev" 2>/dev/null | grep "Volume Name:" | awk -F': ' '{print $2}' | xargs)" || true
+        media_name="$(diskutil info "$dev" 2>/dev/null | grep "Device / Media Name:" | awk -F': ' '{print $2}' | xargs)" || true
+        if [ "$vol_name" = "Not applicable (no file system)" ] || [ -z "$vol_name" ]; then
+            vol_name="${media_name:-$(dev_name "$dev")}"
+        fi
+        info "Unmounting ext4fuse mount..."
+        unmount_ext4_volume "/Volumes/$vol_name"
+        mount | grep -qF " on /Volumes/$vol_name (" && error "Failed to unmount /Volumes/$vol_name."
+        sudo rm -f "/tmp/ext4_mounted_$(dev_name "$dev")" 2>/dev/null || true
+        sleep 0.5
+    fi
+
     info "Ejecting $dev..."
-    sudo diskutil eject "$dev" >/dev/null 2>&1 || \
-        error "Failed to eject $dev."
+    sudo diskutil eject "$dev" >/dev/null 2>&1 || error "Failed to eject $dev."
 
     ok "Ejected. Safe to remove."
 }
 
 # ============================================================
-# Restore to macOS read-only mount
+# Restore to macOS read-only mount (NTFS only)
 # ============================================================
 restore_readonly() {
     local device="$1"
     local dev="$(dev_path "$device")"
 
-    # Unmount ntfs-3g mount
+    local fs_kind
+    fs_kind="$(detect_fs_type "$dev")" || error "Unknown filesystem on $dev."
+    [ "$fs_kind" = "ext4" ] && error "Restore to read-only is only supported for NTFS volumes."
+
     if mount | grep -q "ntfs-3g.*$(dev_name "$dev")"; then
         info "Unmounting ntfs-3g mount..."
-        sudo umount -f "$dev" 2>/dev/null || \
-            error "Failed to unmount $dev."
+        sudo umount -f "$dev" 2>/dev/null || error "Failed to unmount $dev."
 
         sudo rm -f "/tmp/ntfs_mounted_$(dev_name "$dev")" 2>/dev/null || true
         sleep 0.5
 
-        # Let macOS auto-remount as read-only
         info "Waiting for macOS to auto-remount as read-only..."
         local retries=0
         while [ $retries -lt 10 ]; do
@@ -172,13 +232,11 @@ restore_readonly() {
             retries=$((retries + 1))
         done
 
-        # Force mount if auto-remount didn't happen
         info "Auto-remount didn't trigger, forcing..."
         sudo diskutil mount "$dev" >/dev/null 2>&1 && \
             ok "Restored to macOS read-only mount." || \
             warn "Could not restore. macOS may remount it on reconnection."
     else
-        # Check if it's a macOS native mount (already read-only)
         if mount | grep -q "ntfs.*$(dev_name "$dev")"; then
             warn "Already mounted as macOS read-only."
         else

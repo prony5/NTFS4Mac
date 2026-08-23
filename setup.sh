@@ -28,8 +28,8 @@ command_exists() {
 
 # Step 1: Install Homebrew if needed
 echo ""
-echo "Step 1/4: Checking Homebrew..."
-echo "步骤 1/4: 检查 Homebrew..."
+echo "Step 1/5: Checking Homebrew..."
+echo "步骤 1/5: 检查 Homebrew..."
 if command_exists brew; then
     echo "✅ Homebrew already installed"
 else
@@ -41,8 +41,8 @@ fi
 
 # Step 2: Install fuse-t
 echo ""
-echo "Step 2/4: Installing fuse-t..."
-echo "步骤 2/4: 安装 fuse-t..."
+echo "Step 2/5: Installing fuse-t..."
+echo "步骤 2/5: 安装 fuse-t..."
 if [[ -d "/Applications/fuse-t.app" ]]; then
     echo "✅ fuse-t already installed"
 else
@@ -67,24 +67,32 @@ else
     echo "   系统设置 > 隐私与安全性 > 完全磁盘访问 > + > /Applications/fuse-t.app"
 fi
 
-# Step 3: Install ntfs-3g
+# Step 3: Install ntfs-3g and ext4fuse
 echo ""
-echo "Step 3/4: Installing ntfs-3g..."
-echo "步骤 3/4: 安装 ntfs-3g..."
+echo "Step 3/5: Installing ntfs-3g and ext4fuse..."
+echo "步骤 3/5: 安装 ntfs-3g 和 ext4fuse..."
+brew tap gromgit/fuse 2>/dev/null || true
 if command_exists ntfs-3g; then
     echo "✅ ntfs-3g already installed"
 else
     echo "📦 Installing ntfs-3g..."
     echo "📦 正在安装 ntfs-3g..."
-    brew tap gromgit/fuse
     brew install ntfs-3g-mac
     echo "✅ ntfs-3g installed"
+fi
+if command_exists ext4fuse; then
+    echo "✅ ext4fuse already installed"
+else
+    echo "📦 Installing ext4fuse..."
+    echo "📦 正在安装 ext4fuse..."
+    brew install ext4fuse-mac
+    echo "✅ ext4fuse installed"
 fi
 
 # Step 4: Link fuse-t library
 echo ""
-echo "Step 4/4: Linking fuse-t library..."
-echo "步骤 4/4: 链接 fuse-t 库..."
+echo "Step 4/5: Linking fuse-t library..."
+echo "步骤 4/5: 链接 fuse-t 库..."
 if [[ -L "/usr/local/lib/libfuse.2.dylib" ]]; then
     LINK_TARGET=$(readlink /usr/local/lib/libfuse.2.dylib)
     if [[ "$LINK_TARGET" == *"fuse-t"* ]]; then

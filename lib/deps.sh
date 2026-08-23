@@ -16,6 +16,7 @@ check_all_deps() {
     check_dep "Homebrew"  "brew"      "https://brew.sh"          "brew install --cask macfuse && brew install ntfs-3g-mac"
     check_dep "macFUSE"   "brew"      ""                         "brew list --cask macfuse"
     check_dep "ntfs-3g"   "ntfs-3g"   ""                         "brew install ntfs-3g-mac"
+    check_dep "ext4fuse"  "ext4fuse"  ""                         "brew install ext4fuse-mac"
     check_dep "fswatch"   "fswatch"   "https://emcrisostomo.github.io/fswatch/" "brew install fswatch"
 
     echo "─────────────────────────────────────────────────────────────"
@@ -92,5 +93,12 @@ check_ntfs3g() {
     local path
     path="$(find_ntfs3g)" || error "ntfs-3g not found.
   Install: brew tap gromgit/fuse && brew install ntfs-3g-mac
+  Also requires: brew install --cask macfuse (restart after install)"
+}
+
+check_ext4fuse() {
+    local path
+    path="$(find_ext4fuse)" || error "ext4fuse not found.
+  Install: brew tap gromgit/fuse && brew install ext4fuse-mac
   Also requires: brew install --cask macfuse (restart after install)"
 }

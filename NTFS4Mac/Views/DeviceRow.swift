@@ -2,6 +2,7 @@ import SwiftUI
 
 struct DeviceRow: View {
     let device: NTFSDevice
+    var isOperating = false
     let onMount: () -> Void
     let onUnmount: () -> Void
     let onRestore: () -> Void
@@ -17,8 +18,17 @@ struct DeviceRow: View {
 
             // Device info
             VStack(alignment: .leading, spacing: 4) {
-                Text(device.displayName)
-                    .font(.headline)
+                HStack(spacing: 8) {
+                    Text(device.displayName)
+                        .font(.headline)
+                    Text(device.filesystemType.displayName)
+                        .font(.system(.caption2, design: .monospaced))
+                        .fontWeight(.medium)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(Color.secondary.opacity(0.15)))
+                }
                 HStack(spacing: 12) {
                     Text(device.id)
                         .font(.system(.caption, design: .monospaced))
@@ -40,8 +50,8 @@ struct DeviceRow: View {
                 .padding(.vertical, 4)
                 .background(Capsule().fill(statusColor))
 
-            // Open in Finder button (if mounted)
-            if device.isMounted {
+            // Open in Finder (only when accessible)
+            if device.isMounted && device.isAccessible {
                 Button(action: onOpenInFinder) {
                     Image(systemName: "folder")
                 }
@@ -50,12 +60,13 @@ struct DeviceRow: View {
                 .help("Open in Finder")
             }
 
-            // Action button (only if not RW)
-            if !device.isReadWrite {
-                Button("Mount RW") { onMount() }
+            // Action button
+            if device.needsMountAction {
+                Button(device.filesystemType.mountButtonLabel) { onMount() }
                     .buttonStyle(.borderedProminent)
                     .tint(.accentColor)
                     .controlSize(.small)
+                    .disabled(isOperating)
             }
 
             Button(action: onEject) {
@@ -63,6 +74,7 @@ struct DeviceRow: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
+            .disabled(isOperating)
             .help("Safely disconnect this drive")
         }
         .padding(.vertical, 8)
