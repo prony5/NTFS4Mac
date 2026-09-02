@@ -77,6 +77,13 @@ struct DeviceRow: View {
                 .disabled(isOperating)
                 .help("Unmount and safely disconnect this drive")
             }
+
+            Button(action: onEject) {
+                Label("Eject", systemImage: "eject.fill")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .help("Safely disconnect this drive")
         }
         .padding(.vertical, 8)
         .padding(.horizontal, 12)
