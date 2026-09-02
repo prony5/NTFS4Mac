@@ -95,6 +95,10 @@ final class MountService: Sendable {
         let (_, exitCode, stderr) = try await Shell.runShellScriptWithSudoDetailed(mountScript)
 
         if exitCode != 0 {
+            if await isVolumeMounted(at: mountPath),
+               FileManager.default.isReadableFile(atPath: mountPath) {
+                return
+            }
             let details = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
             throw MountError.mountFailed(code: exitCode, details: details.isEmpty ? nil : details, filesystem: .ntfs)
         }
@@ -160,21 +164,15 @@ final class MountService: Sendable {
         "$NTFS3G" "$DISK" "$MOUNT_PATH" -o auto_xattr -o volname='\(volName)' -o local -o remove_hiberfile -o sync &
         FUSE_PID=$!
         MOUNTED=0
-        for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
-          if /sbin/mount | /usr/bin/grep -F " on $MOUNT_PATH (" >/dev/null 2>&1; then
+        for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
+          if /sbin/mount | /usr/bin/grep -F " on $MOUNT_PATH (" >/dev/null 2>&1 \
+            || /sbin/mount | /usr/bin/grep -F " on $MOUNT_PATH," >/dev/null 2>&1; then
             MOUNTED=1
-            break
-          fi
-          if ! /bin/kill -0 "$FUSE_PID" 2>/dev/null; then
             break
           fi
           /bin/sleep 0.5
         done
-        if [ "$MOUNTED" -eq 0 ] && /sbin/mount | /usr/bin/grep -F " on $MOUNT_PATH (" >/dev/null 2>&1; then
-          MOUNTED=1
-        fi
         if [ "$MOUNTED" -eq 0 ]; then
-          /bin/kill "$FUSE_PID" 2>/dev/null || true
           echo "ntfs-3g did not mount $MOUNT_PATH" >&2
           exit 1
         fi
@@ -224,19 +222,14 @@ final class MountService: Sendable {
         "$EXT4FUSE" "$DISK" "$MOUNT_PATH" -o allow_other -o defer_permissions -o uid=$CONSOLE_UID -o gid=$CONSOLE_GID &
         FUSE_PID=$!
         MOUNTED=0
-        for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
-          if /sbin/mount | /usr/bin/grep -F " on $MOUNT_PATH (" >/dev/null 2>&1; then
+        for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
+          if /sbin/mount | /usr/bin/grep -F " on $MOUNT_PATH (" >/dev/null 2>&1 \
+            || /sbin/mount | /usr/bin/grep -F " on $MOUNT_PATH," >/dev/null 2>&1; then
             MOUNTED=1
-            break
-          fi
-          if ! /bin/kill -0 "$FUSE_PID" 2>/dev/null; then
             break
           fi
           /bin/sleep 0.5
         done
-        if [ "$MOUNTED" -eq 0 ] && /sbin/mount | /usr/bin/grep -F " on $MOUNT_PATH (" >/dev/null 2>&1; then
-          MOUNTED=1
-        fi
         if [ "$MOUNTED" -eq 0 ]; then
           /bin/kill "$FUSE_PID" 2>/dev/null || true
           echo "ext4fuse did not mount $MOUNT_PATH" >&2
@@ -248,7 +241,7 @@ final class MountService: Sendable {
 
     private func isVolumeMounted(at mountPath: String) async -> Bool {
         guard let output = try? await Shell.run("/sbin/mount") else { return false }
-        return output.contains(" on \(mountPath) (")
+        return output.contains(" on \(mountPath) (") || output.contains(" on \(mountPath),")
     }
 
     private func mountExt4(device: NTFSDevice) async throws {

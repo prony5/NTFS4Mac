@@ -227,24 +227,28 @@ unmount_ext4_volume() {
     diskutil unmount force "$mount_path" 2>/dev/null || true
 }
 
-# Wait until a mount point appears (ext4fuse runs in background)
+# Returns 0 when mount_path is active in the mount table
+is_mount_path_active() {
+    local mount_path="$1"
+    mount | grep -qF " on $mount_path (" && return 0
+    mount | grep -qF " on $mount_path," && return 0
+    return 1
+}
+
+# Wait until a mount point appears (FUSE daemons may fork and exit early)
 wait_for_mount_point() {
     local mount_path="$1"
-    local fuse_pid="${2:-}"
+    local _fuse_pid="${2:-}"
     local attempt
 
-    for attempt in $(seq 1 20); do
-        if mount | grep -qF " on $mount_path ("; then
+    for attempt in $(seq 1 30); do
+        if is_mount_path_active "$mount_path"; then
             return 0
-        fi
-        if [ -n "$fuse_pid" ] && ! kill -0 "$fuse_pid" 2>/dev/null; then
-            mount | grep -qF " on $mount_path ("
-            return $?
         fi
         sleep 0.5
     done
 
-    mount | grep -qF " on $mount_path ("
+    is_mount_path_active "$mount_path"
 }
 
 # Mount ext4 via ext4fuse (must run as root)

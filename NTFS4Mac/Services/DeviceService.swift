@@ -225,7 +225,9 @@ final class DeviceService {
             return nil
         }
 
-        let volumeName = info["volumeName"] ?? partID
+        let volumeName = info["volumeName"] ?? ""
+        let effectiveVolumeName = volumeName.isEmpty ? partID : volumeName
+        let expectedMount = "/Volumes/\(effectiveVolumeName)"
         var isRW = false
         var isMounted = false
         var mountPoint: String? = nil
@@ -233,23 +235,36 @@ final class DeviceService {
         switch filesystemType {
         case .ntfs:
             for line in mountOutput.components(separatedBy: "\n") {
-                if line.contains("fuse-t:/\(volumeName)") || line.contains("fuse-t:/\(volumeName) ") {
-                    if let mp = extractMountPoint(from: line) {
+                guard let mp = extractMountPoint(from: line) else { continue }
+
+                if mp == expectedMount {
+                    if line.contains("fuse-t") || line.contains("ntfs-3g") || line.contains("macfuse") {
                         isMounted = true
                         mountPoint = mp
                         isRW = FileManager.default.isWritableFile(atPath: mp)
+                        break
                     }
+                    if line.contains("ntfs") {
+                        isMounted = true
+                        mountPoint = mp
+                    }
+                }
+
+                if line.contains("fuse-t:/\(effectiveVolumeName)") {
+                    isMounted = true
+                    mountPoint = mp
+                    isRW = FileManager.default.isWritableFile(atPath: mp)
                     break
                 }
                 if line.contains(partID) && (line.contains("macfuse") || line.contains("ntfs-3g")) {
                     isRW = true
                     isMounted = true
-                    mountPoint = extractMountPoint(from: line)
+                    mountPoint = mp
                     break
                 }
                 if line.contains(partID) && line.contains("ntfs") {
                     isMounted = true
-                    mountPoint = extractMountPoint(from: line)
+                    mountPoint = mp
                 }
             }
 
@@ -274,7 +289,7 @@ final class DeviceService {
         return NTFSDevice(
             id: partID,
             diskNode: "/dev/\(partID)",
-            volumeName: volumeName,
+            volumeName: effectiveVolumeName == partID && volumeName.isEmpty ? "" : effectiveVolumeName,
             fileSystem: displayFS,
             filesystemType: filesystemType,
             size: info["diskSize"] ?? "Unknown",
