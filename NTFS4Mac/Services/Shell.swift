@@ -24,15 +24,11 @@ enum Shell {
         return (stdout, exitCode)
     }
 
-    /// Runs a shell script with administrator privileges via a temp file to avoid AppleScript quoting issues.
+    /// Runs a shell script as root. Password is asked once per app launch.
     static func runShellScriptWithSudoDetailed(_ script: String) async throws -> (stdout: String, exitCode: Int32, stderr: String) {
-        let tempURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ntfs4mac-\(UUID().uuidString).sh")
-        let content = "#!/bin/sh\n" + script.trimmingCharacters(in: .whitespacesAndNewlines) + "\n"
-        try content.write(to: tempURL, atomically: true, encoding: .utf8)
-        defer { try? FileManager.default.removeItem(at: tempURL) }
-
-        return try await runWithSudoDetailed("/bin/sh", arguments: [tempURL.path])
+        try await Task.detached {
+            try PrivilegedSession.shared.run(script)
+        }.value
     }
 
     static func runShellScriptWithSudo(_ script: String) async throws -> (stdout: String, exitCode: Int32) {
@@ -43,40 +39,12 @@ enum Shell {
     static func runWithSudoDetailed(_ command: String, arguments: [String] = []) async throws -> (stdout: String, exitCode: Int32, stderr: String) {
         var parts = [command]
         for arg in arguments {
-            if arg.contains(" ") || arg.contains("'") || arg.contains("\"") || arg.contains("$") {
-                let escaped = arg
-                    .replacingOccurrences(of: "\\", with: "\\\\")
-                    .replacingOccurrences(of: "\"", with: "\\\"")
-                parts.append("\"\(escaped)\"")
-            } else {
-                parts.append(arg)
-            }
+            let escaped = arg.replacingOccurrences(of: "'", with: "'\\''")
+            parts.append("'\(escaped)'")
         }
-        let fullCommand = parts.joined(separator: " ")
-        let escapedForAppleScript = fullCommand
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-
-        let script = "do shell script \"\(escapedForAppleScript)\" with administrator privileges"
-
-        let process = Process()
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        process.arguments = ["-e", script]
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
-
-        try process.run()
-        process.waitUntilExit()
-
-        let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-        let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-        let stdout = String(data: stdoutData, encoding: .utf8) ?? ""
-        let stderr = String(data: stderrData, encoding: .utf8) ?? ""
-
-        return (stdout, process.terminationStatus, stderr)
+        return try await Task.detached {
+            try PrivilegedSession.shared.run(parts.joined(separator: " "))
+        }.value
     }
 
     static func runDiskutil(_ arguments: [String]) async throws -> String {

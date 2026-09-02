@@ -3,6 +3,7 @@ import AppKit
 
 @main
 struct NTFS4MacApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var deviceService = DeviceService()
     @State private var mountService = MountService()
     @State private var watcher = DeviceWatcher()
@@ -27,5 +28,11 @@ struct NTFS4MacApp: App {
         .commands {
             CommandGroup(replacing: .newItem) {}
         }
+    }
+}
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationWillTerminate(_ notification: Notification) {
+        PrivilegedSession.shared.stop()
     }
 }
