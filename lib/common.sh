@@ -176,13 +176,30 @@ detect_fs_type() {
     partition_type="$(diskutil info "$dev" 2>/dev/null | grep "Partition Type:" | awk -F': ' '{print $2}')" || true
     content="$(diskutil info "$dev" 2>/dev/null | grep "Content (IOContent):" | awk -F': ' '{print $2}' | xargs)" || true
 
-    if [[ "$fs_type" == *NTFS* || "$fs_type" == *ntfs* \
-        || "$partition_type" == *NTFS* || "$partition_type" == *ntfs* ]]; then
+    if [[ "$fs_type" == *NTFS* || "$fs_type" == *ntfs* ]]; then
         echo "ntfs"
         return 0
     fi
 
-    if [[ "$fs_type" == *ext4* || "$partition_type" == *ext4* ]]; then
+    if [[ "$fs_type" == *ext4* ]]; then
+        echo "ext4"
+        return 0
+    fi
+
+    # macOS may misreport an NTFS volume as exfat, but a volume it actually mounted
+    # with its own driver really has that filesystem (MBR type 0x07 is shared by NTFS and exFAT).
+    local native_fs
+    native_fs="$(echo "$fs_type" | xargs)"
+    if [ -n "$native_fs" ] && mount | grep -q "^$dev on .*($native_fs,"; then
+        return 1
+    fi
+
+    if [[ "$partition_type" == *NTFS* || "$partition_type" == *ntfs* ]]; then
+        echo "ntfs"
+        return 0
+    fi
+
+    if [[ "$partition_type" == *ext4* ]]; then
         echo "ext4"
         return 0
     fi

@@ -68,22 +68,13 @@ struct DeviceRow: View {
                     .disabled(isOperating)
             }
 
-            if device.isMounted {
-                Button(action: onEject) {
-                    Label("Eject", systemImage: "eject.fill")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(isOperating)
-                .help("Unmount and safely disconnect this drive")
-            }
-
             Button(action: onEject) {
                 Label("Eject", systemImage: "eject.fill")
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .help("Safely disconnect this drive")
+            .disabled(isOperating)
+            .help("Unmount and safely disconnect this drive")
         }
         .padding(.vertical, 8)
         .padding(.horizontal, 12)

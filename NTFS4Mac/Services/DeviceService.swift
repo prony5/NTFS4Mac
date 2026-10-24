@@ -192,14 +192,26 @@ final class DeviceService {
 
     // MARK: - Filesystem detection
 
-    private static func detectFilesystem(fsType: String, partitionType: String) -> FilesystemType? {
-        if fsType.localizedCaseInsensitiveContains("NTFS")
-            || partitionType.localizedCaseInsensitiveContains("NTFS") {
+    private static func detectFilesystem(fsType: String, partitionType: String, mountedNatively: Bool) -> FilesystemType? {
+        if fsType.localizedCaseInsensitiveContains("NTFS") {
             return .ntfs
         }
 
-        if fsType.localizedCaseInsensitiveContains("ext4")
-            || partitionType.localizedCaseInsensitiveContains("ext4") {
+        if fsType.localizedCaseInsensitiveContains("ext4") {
+            return .ext4
+        }
+
+        // macOS may misreport an NTFS volume as exfat, but a volume it actually mounted
+        // with its own driver really has that filesystem (MBR type 0x07 is shared by NTFS and exFAT).
+        if mountedNatively {
+            return nil
+        }
+
+        if partitionType.localizedCaseInsensitiveContains("NTFS") {
+            return .ntfs
+        }
+
+        if partitionType.localizedCaseInsensitiveContains("ext4") {
             return .ext4
         }
 
@@ -213,6 +225,15 @@ final class DeviceService {
         return nil
     }
 
+    /// True when macOS mounted the partition with the filesystem it reports,
+    /// e.g. "/dev/disk4s1 on /Volumes/X (exfat, local, ...)".
+    private static func isMountedNatively(partID: String, fsType: String, mountOutput: String) -> Bool {
+        guard !fsType.isEmpty else { return false }
+        return mountOutput.components(separatedBy: "\n").contains { line in
+            line.hasPrefix("/dev/\(partID) on ") && line.localizedCaseInsensitiveContains("(\(fsType),")
+        }
+    }
+
     // MARK: - Fetch single device info
 
     private func fetchDeviceInfo(_ partID: String, mountOutput: String) async throws -> NTFSDevice? {
@@ -221,7 +242,12 @@ final class DeviceService {
 
         let fsType = info["fsType"] ?? ""
         let partitionType = info["partitionType"] ?? ""
-        guard let filesystemType = Self.detectFilesystem(fsType: fsType, partitionType: partitionType) else {
+        let mountedNatively = Self.isMountedNatively(partID: partID, fsType: fsType, mountOutput: mountOutput)
+        guard let filesystemType = Self.detectFilesystem(
+            fsType: fsType,
+            partitionType: partitionType,
+            mountedNatively: mountedNatively
+        ) else {
             return nil
         }
 
