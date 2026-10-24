@@ -145,6 +145,7 @@ NTFS4Mac/
 ## Known Issues
 
 - **First launch on macOS**: You may need to right-click > Open the app on first launch since it's not signed.
+- **ntfs-3g needs macFUSE to start**: the `ntfs-3g-mac` formula links macFUSE's `MFMount.framework` without using it. `setup.sh` points that link at an empty stub so macFUSE (and its kernel extension / Reduced Security) is not needed. Re-run `bash lib/unlink-mfmount.sh` after `brew upgrade ntfs-3g-mac`. Installing macFUSE afterwards replaces the fuse-t `libfuse.2.dylib` link; re-run `setup.sh` to restore it.
 
 ## License
 

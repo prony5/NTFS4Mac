@@ -93,12 +93,12 @@ check_ntfs3g() {
     local path
     path="$(find_ntfs3g)" || error "ntfs-3g not found.
   Install: brew tap gromgit/fuse && brew install ntfs-3g-mac
-  Also requires: brew install --cask macfuse (restart after install)"
+  Also requires fuse-t: run setup.sh (installs fuse-t and links libfuse)"
 }
 
 check_ext4fuse() {
     local path
     path="$(find_ext4fuse)" || error "ext4fuse not found.
   Install: brew tap gromgit/fuse && brew install ext4fuse-mac
-  Also requires: brew install --cask macfuse (restart after install)"
+  Also requires fuse-t: run setup.sh (installs fuse-t and links libfuse)"
 }

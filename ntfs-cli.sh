@@ -58,8 +58,7 @@ case "$ACTION" in
         source "$LIB_DIR/deps.sh"
         source "$LIB_DIR/devices.sh"
         source "$LIB_DIR/mount.sh"
-        local dev="$(dev_path "$1")"
-        local fs_kind
+        dev="$(dev_path "$1")"
         fs_kind="$(detect_fs_type "$dev")" || error "Unsupported filesystem on $dev."
         case "$fs_kind" in
             ntfs) check_ntfs3g ;;

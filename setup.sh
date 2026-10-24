@@ -112,6 +112,27 @@ else
     echo "✅ Library linked"
 fi
 
+# Step 5: Drop ntfs-3g's leftover macFUSE link (same as lib/unlink-mfmount.sh)
+echo ""
+echo "Step 5/5: Removing macFUSE dependency from ntfs-3g..."
+echo "步骤 5/5: 移除 ntfs-3g 对 macFUSE 的依赖..."
+MFMOUNT="/Library/Filesystems/macfuse.fs/Contents/Frameworks/MFMount.framework/Versions/A/MFMount"
+NTFS3G_CELLAR="$(cd "$(brew --prefix ntfs-3g-mac)" && pwd -P)"
+MFMOUNT_STUB="$NTFS3G_CELLAR/lib/libmfmount-stub.dylib"
+if [[ ! -f "$MFMOUNT_STUB" ]]; then
+    echo 'void ntfs4mac_mfmount_stub(void) {}' \
+        | clang -dynamiclib -x c - -install_name "$MFMOUNT_STUB" -o "$MFMOUNT_STUB"
+fi
+for bin in "$NTFS3G_CELLAR"/bin/*; do
+    if [[ -L "$bin" || ! -f "$bin" ]]; then
+        continue
+    fi
+    otool -L "$bin" | grep -qF "$MFMOUNT" || continue
+    install_name_tool -change "$MFMOUNT" "$MFMOUNT_STUB" "$bin" 2>/dev/null
+    codesign -f -s - "$bin" 2>/dev/null
+done
+echo "✅ ntfs-3g runs without macFUSE (re-run after brew upgrade ntfs-3g-mac)"
+
 # Done
 echo ""
 echo "=========================================="
