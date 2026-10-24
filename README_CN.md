@@ -35,7 +35,7 @@ macOS 原生以只读模式挂载 NTFS 卷。本工具使用 [ntfs-3g](https://g
 在终端运行以下命令，自动安装所有依赖：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zhouyeyu/NTFS4Mac/main/setup.sh | bash
+curl -fsSL https://raw.githubusercontent.com/prony5/NTFS4Mac/main/setup.sh | bash
 ```
 
 ### 手动安装
@@ -68,7 +68,7 @@ sudo ln -sf libfuse-t.dylib /usr/local/lib/libfuse.2.dylib
 或从源码构建：
 
 ```bash
-git clone https://github.com/zhouyeyu/NTFS4Mac.git
+git clone https://github.com/prony5/NTFS4Mac.git
 cd NTFS4Mac
 bash build-dmg.sh
 ```
@@ -76,7 +76,7 @@ bash build-dmg.sh
 ### 安装命令行工具
 
 ```bash
-git clone https://github.com/zhouyeyu/NTFS4Mac.git
+git clone https://github.com/prony5/NTFS4Mac.git
 cd NTFS4Mac
 make install
 ```

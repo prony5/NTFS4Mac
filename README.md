@@ -36,7 +36,7 @@ macOS natively mounts NTFS volumes as read-only and does not support ext4 at all
 Run this command in Terminal to automatically install all dependencies:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zhouyeyu/NTFS4Mac/main/setup.sh | bash
+curl -fsSL https://raw.githubusercontent.com/prony5/NTFS4Mac/main/setup.sh | bash
 ```
 
 ### Manual Setup
@@ -70,7 +70,7 @@ Download the latest [DMG from Releases](../../releases) and drag `NTFS4Mac.app` 
 Or build from source:
 
 ```bash
-git clone https://github.com/zhouyeyu/NTFS4Mac.git
+git clone https://github.com/prony5/NTFS4Mac.git
 cd NTFS4Mac
 bash build-dmg.sh
 ```
@@ -78,7 +78,7 @@ bash build-dmg.sh
 ### Install CLI Tool
 
 ```bash
-git clone https://github.com/zhouyeyu/NTFS4Mac.git
+git clone https://github.com/prony5/NTFS4Mac.git
 cd NTFS4Mac
 make install
 ```
